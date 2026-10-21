@@ -35,7 +35,13 @@ python trustscan.py --format csv > findings.csv
 pwsh -File trustscan.ps1
 ```
 
-Exit codes: `0` = clean, `1` = finding(s), `2` = error.
+Exit codes: `0` = clean, `1` = finding(s), `2` = error. INFO-only results (see
+`--flag-aaa` below) exit `0`.
+
+Every run ends with a one-line caveat about the AAA cross-sign path (see
+[Scope & limitations](#scope--limitations-read-this)). In `text` mode it is part
+of the report; in `json`/`csv` mode it goes to stderr so the machine-readable
+output stays clean.
 
 ## How a cert is matched
 
@@ -46,10 +52,17 @@ Every certificate found at any location below is fingerprinted and checked four 
 | `compromised_ca_cert` | CRITICAL | exact compromised intermediate (cert SHA-256) |
 | `compromised_key_reuse` | CRITICAL | a *different* cert carrying a compromised **key** (SPKI SHA-256) - catches the Sectigo cross-signs and any re-issue |
 | `issued_by_compromised_ca` | HIGH | a leaf/sub-CA whose AuthorityKeyIdentifier points at a compromised intermediate - forgeable |
-| `distrust_root_present` | CRITICAL | a distrusted emSign root is still trusted here. Its own key is intact - but the intermediate keys are public, so while this root is trusted a forged cert for **any** domain validates for every client that doesn't check revocation (most non-browser clients). Remove it / update the bundle |
+| `distrust_root_present` | CRITICAL | a distrusted emSign root is still trusted here. Its own key is intact - but the intermediate keys are public, so while this root is trusted a forged cert for **any** domain validates for every client that doesn't check revocation (most non-browser clients). Remove it / update the bundle. On its own this does not close the AAA cross-sign path (below) |
 
-The legitimate Sectigo root **AAA Certificate Services is never flagged** - it
-only cross-signed the bad intermediates and remains valid.
+One further check is **opt-in** (`--flag-aaa` / `-FlagAaa`):
+
+| Match | Severity | Meaning |
+|---|---|---|
+| `cross_sign_root_present` | INFO | the legitimate Sectigo root **AAA Certificate Services** is present. It cross-signed the eight intermediates, so it anchors their second trust path, but its own key is intact and most OS and library stores still trust it. Reported only on request, for teams that have chosen to drop it (as Homebrew's bundle does); never affects the exit code |
+
+By default **AAA Certificate Services is not flagged**: removing it breaks a
+great many legitimate sites, so that is a deliberate choice, not a default
+remediation. See the limitations below for why this matters.
 
 ## Where `trustscan` looks
 
@@ -130,14 +143,19 @@ PEM/DER X.509, PKCS#7 (`.p7b/.p7c`), PKCS#12 (`.p12/.pfx`, tried with
 ## Scope & limitations (read this)
 
 **A clean result does not mean the host is safe.** The compromised intermediates
-were also cross-signed by Sectigo's `AAA Certificate Services`, a legitimate,
-widely-trusted root that cannot be removed and that this tool never flags by
-default. A client that does not check revocation can still accept a forged chain
-through that path even with every emSign root gone. The real fix is to block the
-eight intermediates, patch the client, or enable revocation, not just remove a
-root. This scanner finds stale and known-bad trust anchors; it does not prove a
-client rejects forged chains. (`--flag-aaa` / `-FlagAaa` reports AAA presence as
-an INFO finding, for teams that have chosen to drop it.)
+were also cross-signed by Sectigo's `AAA Certificate Services`, a legitimate root
+that most OS and library stores still trust (Firefox and Chrome already distrust
+it for TLS under their 15-year root-age policy, and Homebrew's updated
+`ca-certificates` bundle drops it) and that this tool does not flag by default,
+because removing it breaks a great many legitimate sites. A client that does not
+check revocation can still accept a forged chain through that path even with every
+emSign root gone. The real fix is to **block the eight intermediate keys by SPKI**
+(as Chrome and Go do - the cross-signed copies are different certificates with the
+same keys, so a block by certificate hash misses them), patch the client, or
+enable revocation checking; removing a root is not enough on its own. This scanner
+finds stale and known-bad trust anchors; it does not prove a client rejects forged
+chains. (`--flag-aaa` / `-FlagAaa` reports AAA presence as an INFO finding, for
+teams that have chosen to drop it.)
 
 **`trustscan` cannot cover compiled-in root stores.** Go, Node.js, uv, Electron,
 Bun, and Rust `webpki-roots`/`rustls-webpki` bake their CA roots into the binary
@@ -173,6 +191,8 @@ scalars match the independently published analysis.
 ## References
 
 - Mozilla Security Blog - [Protecting Firefox users](https://blog.mozilla.org/security/2026/10/20/protecting-firefox-users-following-the-compromise-of-emudhra-intermediate-certificates/)
+- Google Security Blog - [Protecting Chrome and Android users](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)
+- Sectigo - [AAA Certificate Services TLS trust-bit removal (April 2025)](https://www.sectigo.com/resource-library/enhancements-to-root-ca-and-hierarchies)
 - Bugzilla [2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449) (access-restricted)
 - Scott Helme - [Eight Bits of Trust](https://scotthelme.co.uk/eight-bits-of-trust-emudhras-ca-keys-cracked-in-milliseconds/)
 - Community tracker - [emudhra.we-have-a-problem.com](https://emudhra.we-have-a-problem.com/)

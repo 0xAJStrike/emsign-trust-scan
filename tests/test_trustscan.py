@@ -365,6 +365,22 @@ def test_aaa_caveat_printed_once_on_clean_scan(tmp_path, capsys):
     assert out.count("AAA Certificate Services") == 1   # footer only, not per-row
 
 
+def test_caveat_goes_to_stderr_in_machine_formats(tmp_path, capsys):
+    """json/csv stdout must stay parseable: the caveat is stderr-only there."""
+    good = build_cert(ec.generate_private_key(ec.SECP384R1()), "good")
+    ioc = _aaa_ioc(tmp_path, build_cert(ec.generate_private_key(ec.SECP384R1()), "AAA"))
+    certfile = tmp_path / "good.pem"
+    certfile.write_bytes(pem_bytes(good))
+    for fmt in ("json", "csv"):
+        ts.main([str(certfile), "--ioc-file", str(ioc), "--source", "paths", "--format", fmt])
+        captured = capsys.readouterr()
+        assert "does not prove the host rejects forged chains" not in captured.out
+        assert "does not prove the host rejects forged chains" in captured.err
+    # and json stdout is exactly a JSON document
+    ts.main([str(certfile), "--ioc-file", str(ioc), "--source", "paths", "--format", "json"])
+    assert json.loads(capsys.readouterr().out) == []
+
+
 # --------------------------------------------------------------------------- #
 # integration against the shipped IOC file
 # --------------------------------------------------------------------------- #

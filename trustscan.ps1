@@ -18,11 +18,16 @@ using namespace System.Security.Cryptography.X509Certificates
     compromised_key_reuse     (SubjectPublicKeyInfo SHA-256 -- cross-signs/re-issues)
     issued_by_compromised_ca  (AuthorityKeyIdentifier -> compromised CA)
     distrust_root_present     (an emSign root to distrust)
-  The legitimate Sectigo root "AAA Certificate Services" is never flagged unless
-  -FlagAaa is given, which reports it as an INFO finding when present.
+  The legitimate Sectigo root "AAA Certificate Services" is not flagged by default:
+  it cross-signed the bad intermediates, so it anchors their second trust path,
+  but most OS and library stores still trust it and dropping it breaks legitimate
+  sites. -FlagAaa reports it as an INFO finding (cross_sign_root_present) for
+  teams that have chosen to remove it. Every run ends with a one-line caveat
+  about that path.
 
   IOC data comes from emsign_iocs.json (built/verified by tools/build_iocs.py).
-  Exit codes: 0 = clean, 1 = findings, 2 = IOC load error.
+  Exit codes: 0 = clean (INFO-only results count as clean), 1 = findings,
+  2 = IOC load error.
 
 .EXAMPLE
   pwsh -File trustscan.ps1
@@ -72,8 +77,11 @@ foreach ($r in $ioc.affected_roots) {
 
 # Printed once per run (not per finding): a trust-store scan cannot prove a client
 # rejects forged chains, because the compromised intermediates are also cross-signed
-# by the legitimate AAA Certificate Services root.
-$AaaCaveat = 'Note: this scan does not prove the host rejects forged chains. The compromised intermediates are also cross-signed by AAA Certificate Services, a legitimate root that cannot be removed; a client that skips revocation can still accept a forged chain through it. Full remediation needs the eight intermediate keys blocked, the client patched, or revocation enabled.'
+# by the legitimate AAA Certificate Services root. That root CAN be removed (Firefox
+# and Chrome already distrust it for TLS; Homebrew's bundle drops it) but most OS and
+# library stores still trust it and dropping it breaks many legitimate sites, so it
+# is not flagged by default.
+$AaaCaveat = 'Note: this scan does not prove the host rejects forged chains. The compromised intermediates are also cross-signed by AAA Certificate Services, a legitimate root that most OS and library stores still trust and that this tool does not flag by default (removing it breaks many legitimate sites; -FlagAaa reports it). A client that skips revocation can still accept a forged chain through it even with every emSign root gone. Full remediation needs the eight intermediate keys blocked by SPKI (as Chrome and Go do), the client patched, or revocation checking enabled.'
 
 # --------------------------------------------------------------------------- #
 # cert helpers
@@ -134,12 +142,12 @@ function Test-Cert($Cert, [string]$Source, [string]$Location) {
     if ($DistrustCert.ContainsKey($certFp)) {
         $e = $DistrustCert[$certFp]
         $findings += New-F 'CRITICAL' 'distrust_root_present' $e.name $null `
-            'distrusted emSign root still trusted here; forged chains from the leaked intermediate keys validate against it. Remove it or update the bundle.'
+            'distrusted emSign root still trusted here; forged chains from the leaked intermediate keys validate against it. Remove it or update the bundle. This alone does not close the AAA cross-sign path: block the intermediate keys or enable revocation checking.'
     }
     elseif ($spkiFp -and $DistrustSpki.ContainsKey($spkiFp)) {
         $e = $DistrustSpki[$spkiFp]
         $findings += New-F 'CRITICAL' 'distrust_root_present' $e.name $null `
-            'distrusted emSign root key present under a different cert; forged chains from the leaked intermediate keys validate against it. Remove it.'
+            'distrusted emSign root key present under a different cert; forged chains from the leaked intermediate keys validate against it. Remove it. This alone does not close the AAA cross-sign path: block the intermediate keys or enable revocation checking.'
     }
 
     if ($FlagAaa) {
@@ -148,7 +156,7 @@ function Test-Cert($Cert, [string]$Source, [string]$Location) {
         elseif ($spkiFp -and $ContextSpki.ContainsKey($spkiFp)) { $ctx = $ContextSpki[$spkiFp] }
         if ($ctx) {
             $findings += New-F 'INFO' 'cross_sign_root_present' $ctx.name $null `
-                'legitimate cross-signing root present; it anchors the compromised intermediates'' second trust path. Cannot be removed system-wide; relevant only if you chose to drop it.'
+                'legitimate cross-signing root present; it anchors the compromised intermediates'' second trust path. Not flagged by default because most stores still trust it and dropping it breaks legitimate sites; reported for teams that have chosen to remove it (as Homebrew''s bundle does).'
         }
     }
 
@@ -304,8 +312,9 @@ switch ($Format) {
         [Console]::Error.WriteLine($AaaCaveat)
     }
     default {
+        $stamp = if ($ioc.generated) { " (IOC data generated $($ioc.generated))" } else { '' }
         if (-not $dedup.Count) {
-            'No eMudhra/emSign compromised certificates found in the scanned stores.'
+            "No eMudhra/emSign compromised certificates found in the scanned stores.$stamp"
         }
         else {
             foreach ($f in $dedup) {
@@ -324,7 +333,7 @@ switch ($Format) {
                 ''
             }
             $counts = $dedup | Group-Object severity | ForEach-Object { "$($_.Count) $($_.Name)" }
-            "Summary: $($dedup.Count) finding(s): $($counts -join ', ')"
+            "Summary: $($dedup.Count) finding(s): $($counts -join ', ')$stamp"
         }
         ''
         $AaaCaveat

@@ -18,13 +18,17 @@ It matches a discovered certificate four ways:
                                at a compromised intermediate (a forgeable cert)
   4. distrust_root_present   - an emSign root slated for distrust is present
 
-The legitimate Sectigo root "AAA Certificate Services" is NOT flagged: it merely
-cross-signed the bad intermediates and remains a valid root.
+The legitimate Sectigo root "AAA Certificate Services" is not flagged by default:
+it cross-signed the bad intermediates, so it anchors their second trust path, but
+most OS and library stores still trust it and dropping it breaks legitimate sites.
+--flag-aaa reports it as an INFO finding (cross_sign_root_present) for teams that
+have chosen to remove it. Every run ends with a one-line caveat about that path.
 
 IOC data comes from emsign_iocs.json (next to this script, or --ioc-file),
 which is generated and fingerprint-verified by tools/build_iocs.py.
 
-Exit codes: 0 = clean, 1 = at least one finding, 2 = usage/IOC-load error.
+Exit codes: 0 = clean (INFO-only results count as clean), 1 = at least one
+finding, 2 = usage/IOC-load error.
 """
 
 from __future__ import annotations
@@ -59,13 +63,18 @@ _JKS_MAGIC = b"\xfe\xed\xfe\xed"
 
 # Printed once per run (not per finding): a scan of trust stores cannot prove a
 # client rejects forged chains, because the compromised intermediates are also
-# cross-signed by the legitimate AAA Certificate Services root.
+# cross-signed by the legitimate AAA Certificate Services root. That root CAN be
+# removed (Firefox and Chrome already distrust it for TLS; Homebrew's bundle drops
+# it) but most OS and library stores still trust it and dropping it breaks many
+# legitimate sites, so it is not flagged by default.
 AAA_CAVEAT = (
     "Note: this scan does not prove the host rejects forged chains. The compromised "
     "intermediates are also cross-signed by AAA Certificate Services, a legitimate root "
-    "that cannot be removed; a client that skips revocation can still accept a forged "
-    "chain through it. Full remediation needs the eight intermediate keys blocked, the "
-    "client patched, or revocation enabled."
+    "that most OS and library stores still trust and that this tool does not flag by "
+    "default (removing it breaks many legitimate sites; --flag-aaa reports it). A client "
+    "that skips revocation can still accept a forged chain through it even with every "
+    "emSign root gone. Full remediation needs the eight intermediate keys blocked by "
+    "SPKI (as Chrome and Go do), the client patched, or revocation checking enabled."
 )
 
 
@@ -201,7 +210,9 @@ def match_cert(der: bytes, cert: x509.Certificate, iocs: IOCSet,
                                 matched_name=e["name"],
                                 detail="distrusted emSign root still trusted here; forged chains "
                                        "from the leaked intermediate keys validate against it. "
-                                       "Remove it or update the bundle.",
+                                       "Remove it or update the bundle. This alone does not close "
+                                       "the AAA cross-sign path: block the intermediate keys or "
+                                       "enable revocation checking.",
                                 **base))
     elif spki_fp is not None and spki_fp in iocs.distrust_spki_index:
         e = iocs.distrust_spki_index[spki_fp]
@@ -209,12 +220,15 @@ def match_cert(der: bytes, cert: x509.Certificate, iocs: IOCSet,
                                 matched_name=e["name"],
                                 detail="distrusted emSign root key present under a different cert; "
                                        "forged chains from the leaked intermediate keys validate "
-                                       "against it. Remove it.",
+                                       "against it. Remove it. This alone does not close the AAA "
+                                       "cross-sign path: block the intermediate keys or enable "
+                                       "revocation checking.",
                                 **base))
 
     # Opt-in (--flag-aaa): the legitimate cross-signing root (AAA Certificate
-    # Services) anchors the intermediates' second trust path. INFO only, since it
-    # is a valid root that cannot be removed system-wide.
+    # Services) anchors the intermediates' second trust path. INFO only: it is a
+    # valid root that most stores still trust, and dropping it is a deliberate
+    # choice (Homebrew's bundle does) rather than a default remediation.
     if iocs.flag_aaa:
         ctx = iocs.context_cert_index.get(cert_fp)
         if ctx is None and spki_fp is not None:
@@ -223,8 +237,10 @@ def match_cert(der: bytes, cert: x509.Certificate, iocs: IOCSet,
             findings.append(Finding(severity="INFO", type="cross_sign_root_present",
                                     matched_name=ctx["name"],
                                     detail="legitimate cross-signing root present; it anchors the "
-                                           "compromised intermediates' second trust path. Cannot be "
-                                           "removed system-wide; relevant only if you chose to drop it.",
+                                           "compromised intermediates' second trust path. Not flagged "
+                                           "by default because most stores still trust it and dropping "
+                                           "it breaks legitimate sites; reported for teams that have "
+                                           "chosen to remove it (as Homebrew's bundle does).",
                                     **base))
 
     # Leaf/sub issued by a compromised intermediate -- only if this cert isn't
