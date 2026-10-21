@@ -78,6 +78,7 @@ limitations below for why this matters.
 | `bundles` → curl | standalone curl bundle | `/usr/local/share/curl/curl-ca-bundle.crt` · `/opt/local/share/curl/curl-ca-bundle.crt` · `C:\Program Files\Git\...\ca-bundle.crt` |
 | `bundles` → conda | each env's `ssl/cacert.pem` | `$CONDA_PREFIX` · `/opt/conda` · `~/anaconda3`, `~/miniconda3`, `~/miniforge3` (incl. `envs/*`) |
 | `bundles` → AWS CLI v2 | bundled botocore | `/usr/local/aws-cli/.../botocore/cacert.pem` · `C:\Program Files\Amazon\AWSCLIV2\...` |
+| `bundles` → cloud SDKs / registry / ecosystem | more vendored bundles | gcloud / Azure CLI `third_party/certifi` · container-registry `/etc/{docker,containers}/certs.d/*/` · Perl `Mozilla::CA` · Erlang/Elixir certifi |
 | `bundles` → pip | pip's vendored certifi | `<pip>/_vendor/certifi/cacert.pem` (resolved via `import pip`) |
 | `nss` | Firefox / Thunderbird / Chrome-Linux + system NSS DB | `~/.mozilla/firefox/*/cert9.db` · `~/.thunderbird/*/cert9.db` · `~/snap/firefox/common/.mozilla/firefox/*/cert9.db` · `~/.pki/nssdb/cert9.db` · `/etc/pki/nssdb/cert9.db` · `%APPDATA%\Mozilla\Firefox\Profiles\*\cert9.db` · `%APPDATA%\Thunderbird\Profiles\*\cert9.db` |
 
@@ -90,7 +91,9 @@ limitations below for why this matters.
 | `os` (Windows, Python) | `ssl.enum_certificates` for `ROOT`, `CA`, `MY`, `TrustedPublisher`, `AuthRoot` + Group-Policy-pushed LocalMachine roots (registry) |
 | `java` | `$JAVA_HOME` + JVM roots (`/usr/lib/jvm/*`, `/opt/java/*`, `/Library/Java/JavaVirtualMachines/*`, `C:\Program Files\Java\*`, Adoptium, Corretto, Microsoft) → `.../lib/security/cacerts` |
 | `env` | files in `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`; directory in `SSL_CERT_DIR` |
-| `containers` (opt-in) | Docker `/var/lib/docker/overlay2/*/{diff,merged}`, podman (root + rootless), containerd snapshots - scans each layer's cert paths; **needs root**, location names the layer |
+| `containers` (opt-in) | Docker `/var/lib/docker/overlay2/*/diff`, podman (root + rootless, incl. other users), containerd overlayfs snapshots - scans each layer's aggregate bundle; **needs root**, location names the layer |
+| `apptrust` (opt-in) | app-server & data-infra Java truststores (Tomcat, WildFly/JBoss, Kafka, Elasticsearch) and **app-bundled JREs** under `/opt/*/jre/.../cacerts`, `C:\Program Files\*\jre\...` - private vendor-bundled JREs the host Java scan misses |
+| `--path` targets | config-referenced stores (nginx, Apache, HAProxy, Oracle `sqlnet.ora`, LDAP), and per-project bundles (Composer `vendor/composer/ca-bundle/...`) - point `--path` at them |
 | `paths` | any files/directories you pass |
 | `--rootfs <dir>` | the distro / curl / Java / **Android** store locations **inside** an extracted image or firmware rootfs |
 

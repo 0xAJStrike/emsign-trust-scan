@@ -613,3 +613,51 @@ def test_real_ioc_has_expected_shape():
     actions = {r["name"]: r["action"] for r in data["affected_roots"]}
     assert actions["AAA Certificate Services"] == "legitimate_root_context"
     assert actions["emSign ECC Root CA - G3"] == "review_distrust"
+
+
+# --------------------------------------------------------------------------- #
+# broadened bundle + app-truststore coverage
+# --------------------------------------------------------------------------- #
+
+def test_known_bundle_registry_certs_d(tmp_path, monkeypatch):
+    """A compromised root in a container-registry trust dir
+    (/etc/docker/certs.d/<registry>/ca.crt) is found via the bundles source."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    reg = tmp_path / "certs.d" / "registry.example.com"   # no ':' (invalid on Windows)
+    reg.mkdir(parents=True)
+    (reg / "ca.crt").write_bytes(pem_bytes(bad))
+    monkeypatch.setattr(ts, "_KNOWN_BUNDLE_GLOBS", (str(tmp_path / "certs.d" / "*/"),))
+    findings = ts.dedupe(ts.scan_known_bundles(iocs))
+    assert any(f.type == "compromised_ca_cert" and f.source == "bundle" for f in findings)
+
+
+def test_app_truststore_scanned(tmp_path, monkeypatch):
+    """A compromised root in an app-server truststore is found via the opt-in
+    apptrust source, tagged source=app-truststore."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    store_dir = tmp_path / "wildfly" / "standalone" / "configuration"
+    store_dir.mkdir(parents=True)
+    (store_dir / "application.truststore.pem").write_bytes(pem_bytes(bad))  # PEM: no JKS build
+    monkeypatch.setattr(ts, "_APP_TRUSTSTORE_GLOBS", (str(store_dir / "*.pem"),))
+    findings = ts.dedupe(ts.scan_app_truststores(iocs))
+    assert len(findings) == 1
+    assert findings[0].source == "app-truststore"
+    assert findings[0].type == "compromised_ca_cert"
+
+
+def test_default_all_excludes_optin_sources(tmp_path, monkeypatch):
+    """The default 'all' source set includes the standard scanners and excludes
+    the opt-in ones (containers, apptrust)."""
+    captured = {}
+    monkeypatch.setattr(ts, "run_scan",
+                        lambda paths, iocs, sources, rootfs=(): captured.update(s=set(sources)) or [])
+    ioc = tmp_path / "ioc.json"
+    ioc.write_text(json.dumps({
+        "generated": "2026-10-21",
+        "compromised_certs": [{"name": "x", "cert_sha256": "00" * 32, "spki_sha256": "11" * 32}],
+        "compromised_spki_sha256": ["11" * 32],
+        "compromised_subject_key_identifiers": [], "affected_roots": []}), encoding="utf-8")
+    ts.main(["--ioc-file", str(ioc)])          # no --source => default 'all'
+    assert {"os", "certifi", "bundles", "env", "java", "nss"} <= captured["s"]
+    assert "containers" not in captured["s"]
+    assert "apptrust" not in captured["s"]

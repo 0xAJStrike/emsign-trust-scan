@@ -414,6 +414,26 @@ _KNOWN_BUNDLE_GLOBS = (
     # AWS CLI v2 bundled botocore
     "/usr/local/aws-cli/v2/current/dist/awscli/botocore/cacert.pem",
     r"C:\Program Files\Amazon\AWSCLIV2\awscli\botocore\cacert.pem",
+    # Google Cloud SDK (bundled certifi)
+    "/usr/lib/google-cloud-sdk/lib/third_party/certifi/cacert.pem",
+    "/opt/google-cloud-sdk/lib/third_party/certifi/cacert.pem",
+    "/snap/google-cloud-sdk/current/lib/third_party/certifi/cacert.pem",
+    "~/google-cloud-sdk/lib/third_party/certifi/cacert.pem",
+    r"C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\lib\third_party\certifi\cacert.pem",
+    # Azure CLI (bundled certifi)
+    "/opt/az/lib/python*/site-packages/certifi/cacert.pem",
+    "/usr/lib/azure-cli/lib/python*/site-packages/certifi/cacert.pem",
+    r"C:\Program Files\Microsoft SDKs\Azure\CLI2\Lib\site-packages\certifi\cacert.pem",
+    # Container registry trust (per-registry dirs of *.crt)
+    "/etc/docker/certs.d/*/",
+    "/etc/containers/certs.d/*/",
+    # Perl Mozilla::CA
+    "/usr/share/perl5/Mozilla/CA/cacert.pem",
+    "/usr/lib/perl5/*/Mozilla/CA/cacert.pem",
+    "/usr/local/share/perl/*/Mozilla/CA/cacert.pem",
+    # Erlang/Elixir certifi (hex package)
+    "/usr/lib/erlang/lib/certifi-*/priv/cacerts.pem",
+    "/usr/local/lib/erlang/lib/certifi-*/priv/cacerts.pem",
 )
 
 
@@ -450,9 +470,59 @@ def scan_known_bundles(iocs: IOCSet) -> list[Finding]:
     return findings
 
 
+# Application-server and data-infra truststores (opt-in: --source apptrust).
+# JKS / PKCS12 / PEM, parsed by _certs_from_bytes. Targeted default locations
+# only (no recursive ** walks); every path is existence-filtered, so an entry
+# that does not match your estate is a harmless no-op, not an error. Config-
+# referenced truststores (nginx, Oracle sqlnet.ora, LDAP, ...) still need --path.
+# Kept out of the default 'all' set because install dirs vary and can be large.
+#
+# Note: PKCS#12 truststores protected by a non-default password (some Kafka /
+# Elasticsearch deployments set one) will not parse and are silently skipped;
+# _P12_PASSWORDS only tries changeit/empty/none. Pass such a store via --path with
+# it decrypted, or accept the gap -- same limitation as elsewhere in the tool.
+_APP_TRUSTSTORE_GLOBS = (
+    # Tomcat
+    "$CATALINA_HOME/conf/*.jks", "$CATALINA_HOME/conf/*.p12",
+    "$CATALINA_BASE/conf/*.jks", "$CATALINA_BASE/conf/*.p12",
+    "/opt/tomcat*/conf/*.jks", "/opt/tomcat*/conf/*.p12",
+    # JBoss / WildFly
+    "/opt/wildfly*/standalone/configuration/*.jks",
+    "/opt/wildfly*/standalone/configuration/*.p12",
+    "/opt/jboss*/standalone/configuration/*.jks",
+    # Kafka / Confluent
+    "/opt/kafka*/config/*.jks", "/etc/kafka/*.jks",
+    "/etc/kafka/secrets/*.jks", "/etc/kafka/secrets/*.p12",
+    # Elasticsearch
+    "/etc/elasticsearch/certs/*.p12", "/etc/elasticsearch/certs/*.jks",
+    # App-bundled JREs inside application install trees (1-2 glob levels, not **)
+    "/opt/*/jre/lib/security/cacerts",
+    "/opt/*/*/jre/lib/security/cacerts",
+    r"C:\Program Files\*\jre\lib\security\cacerts",
+    r"C:\Program Files\*\*\jre\lib\security\cacerts",
+)
+
+
+def scan_app_truststores(iocs: IOCSet) -> list[Finding]:
+    """Scan application-server / data-infra truststores and app-bundled JREs for
+    the compromised roots. Opt-in (`--source apptrust`); JKS/PKCS12/PEM aware."""
+    findings: list[Finding] = []
+    seen: set = set()
+    for pattern in _APP_TRUSTSTORE_GLOBS:
+        expanded = os.path.expanduser(os.path.expandvars(pattern))
+        for match in glob.glob(expanded):
+            p = Path(match)
+            if p in seen or not p.is_file():
+                continue
+            seen.add(p)
+            findings.extend(_scan_bundle_file(p, iocs, source="app-truststore"))
+    return findings
+
+
 def scan_env_bundles(iocs: IOCSet) -> list[Finding]:
     findings: list[Finding] = []
-    for var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"):
+    for var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+                "NODE_EXTRA_CA_CERTS", "PGSSLROOTCERT"):
         val = os.environ.get(var)
         if val and Path(val).is_file():
             findings.extend(_scan_bundle_file(Path(val), iocs, source=f"env:{var}"))
@@ -896,6 +966,8 @@ def run_scan(paths: list[str], iocs: IOCSet, sources: set[str],
         findings.extend(scan_nss(iocs))
     if "containers" in sources:
         findings.extend(scan_containers(iocs))
+    if "apptrust" in sources:
+        findings.extend(scan_app_truststores(iocs))
     if "paths" in sources:
         for p in paths:
             findings.extend(scan_path(Path(p), iocs))
@@ -929,9 +1001,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="IOC JSON (default: emsign_iocs.json beside this script)")
     parser.add_argument("--source", action="append",
                         choices=["os", "certifi", "bundles", "env", "java", "nss",
-                                 "containers", "paths", "all"],
+                                 "containers", "apptrust", "paths", "all"],
                         help="which sources to scan (repeatable; default all applicable; "
-                             "'containers' scans Docker/podman/containerd layers and needs root)")
+                             "'containers' scans Docker/podman/containerd layers and needs root; "
+                             "'apptrust' scans app-server/data-infra truststores and app-bundled JREs)")
     parser.add_argument("--rootfs", action="append", default=[],
                         help="scan trust stores inside an extracted image rootfs (repeatable)")
     parser.add_argument("--flag-aaa", action="store_true",
