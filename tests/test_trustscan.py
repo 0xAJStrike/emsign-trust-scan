@@ -572,6 +572,37 @@ def test_scan_containers(tmp_path, monkeypatch):
     assert "deadbeef" in findings[0].location   # layer id preserved for mapping
 
 
+def test_scan_containers_bundle_files_only(tmp_path, monkeypatch):
+    """Container scan reads the aggregate bundle file, not a per-cert dir walk:
+    an individual non-aggregate cert in the layer's certs dir is NOT reported
+    (it isn't the effective trust store), the aggregate IS."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    certs = tmp_path / "overlay2" / "cafe01" / "diff" / "etc" / "ssl" / "certs"
+    certs.mkdir(parents=True)
+    monkeypatch.setattr(ts, "_CONTAINER_LAYER_GLOBS",
+                        (str(tmp_path / "overlay2" / "*" / "diff"),))
+    (certs / "random-ca.pem").write_bytes(pem_bytes(bad))        # individual -> ignored
+    assert ts.scan_containers(iocs) == []
+    (certs / "ca-certificates.crt").write_bytes(pem_bytes(bad))  # aggregate -> found
+    assert len(ts.dedupe(ts.scan_containers(iocs))) == 1
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="symlink creation needs privilege on Windows")
+def test_scan_containers_skips_symlink_escaping_layer(tmp_path, monkeypatch):
+    """An absolute symlink inside a layer pointing onto the host fs is not followed,
+    so we never read a host file and mislabel it as the container's."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    hostfile = tmp_path / "host_ca.pem"
+    hostfile.write_bytes(pem_bytes(bad))                         # outside any layer
+    certs = tmp_path / "overlay2" / "beef02" / "diff" / "etc" / "ssl" / "certs"
+    certs.mkdir(parents=True)
+    (certs / "ca-certificates.crt").symlink_to(hostfile)        # escapes the layer
+    monkeypatch.setattr(ts, "_CONTAINER_LAYER_GLOBS",
+                        (str(tmp_path / "overlay2" / "*" / "diff"),))
+    assert ts.scan_containers(iocs) == []
+
+
 @pytest.mark.skipif(not SHIPPED_IOC.exists(), reason="emsign_iocs.json not built")
 def test_real_ioc_has_expected_shape():
     data = json.loads(SHIPPED_IOC.read_text(encoding="utf-8"))

@@ -762,17 +762,42 @@ def scan_rootfs(root: Path, iocs: IOCSet) -> list[Finding]:
     return findings
 
 
-# Host container storage: each container layer is a rootfs fragment. Scan the
-# known cert paths per layer (targeted, not a full-tree walk); the storage dirs
-# are root-only, so unreadable layers are skipped.
+# Host container storage: each layer's changes live in a 'diff' dir (containerd
+# uses 'fs'). We scan 'diff' only, not the assembled 'merged' mount: 'merged'
+# re-counts every running container's full union (shared base-image roots over
+# and over), while 'diff' reports each layer's certs once, at rest, and overlay2
+# already stores a shared layer a single time. The storage dirs are root-only, so
+# unreadable layers are skipped. Only the containerd *overlayfs* snapshotter is
+# matched (native/btrfs/zfs/stargz use different layouts).
 _CONTAINER_LAYER_GLOBS = (
-    "/var/lib/docker/overlay2/*/diff",                       # Docker (layers at rest)
-    "/var/lib/docker/overlay2/*/merged",                     # Docker (running)
-    "/var/lib/containers/storage/overlay/*/diff",            # podman (root)
-    "/var/lib/containers/storage/overlay/*/merged",
-    "~/.local/share/containers/storage/overlay/*/diff",      # podman (rootless)
+    "/var/lib/docker/overlay2/*/diff",                        # Docker
+    "/var/lib/containers/storage/overlay/*/diff",             # podman (root)
+    "~/.local/share/containers/storage/overlay/*/diff",       # podman (rootless, scanning user)
+    "/home/*/.local/share/containers/storage/overlay/*/diff", # podman (rootless, other users)
     "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/*/fs",  # containerd
 )
+
+
+def _scan_layer_bundles(root: Path, iocs: IOCSet, source: str) -> list[Finding]:
+    """Scan only the aggregate bundle *files* under a container layer (not the
+    per-cert dir walk). The aggregate (ca-certificates.crt / tls-ca-bundle.pem) is
+    the effective trust store, a regular file, and avoids the dir walk's
+    aggregate+per-cert+symlink triple-count. Symlinks that resolve outside the
+    layer (absolute links onto the host fs) are skipped so we never read a host
+    file and mislabel it as the container's."""
+    findings: list[Finding] = []
+    root_real = os.path.realpath(root)
+    for f in _ROOTFS_CERT_FILES:
+        p = root / f
+        try:
+            if not p.is_file():
+                continue
+            if not os.path.realpath(p).startswith(root_real + os.sep):
+                continue  # symlink escapes the layer onto the host
+        except OSError:
+            continue
+        findings.extend(_scan_bundle_file(p, iocs, source))
+    return findings
 
 
 def scan_containers(iocs: IOCSet) -> list[Finding]:
@@ -785,7 +810,7 @@ def scan_containers(iocs: IOCSet) -> list[Finding]:
             lp = Path(layer)
             try:
                 if lp.is_dir():
-                    findings.extend(_scan_trust_paths(lp, iocs, source="container"))
+                    findings.extend(_scan_layer_bundles(lp, iocs, source="container"))
             except OSError:
                 continue
     return findings
