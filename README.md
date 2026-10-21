@@ -59,11 +59,11 @@ One further check is **opt-in** (`--flag-aaa` / `-FlagAaa`):
 
 | Match | Severity | Meaning |
 |---|---|---|
-| `cross_sign_root_present` | INFO | the legitimate Sectigo root **AAA Certificate Services** is present. It cross-signed the eight intermediates, so it anchors their second trust path, but its own key is intact and most OS and library stores still trust it. Reported only on request, for teams that have chosen to drop it (as Homebrew's bundle does); never affects the exit code |
+| `cross_sign_root_present` | INFO | the legitimate Sectigo root **AAA Certificate Services** is present. It cross-signed the eight intermediates, so it anchors their second trust path; its own key is intact. Mozilla and Chrome dropped it in April 2025, but Windows, Apple, older Linux bundles and many Java keystores still trust it. Reported only on request, for teams deciding whether to remove it (Debian's update for this incident does); never affects the exit code |
 
-By default **AAA Certificate Services is not flagged**: removing it breaks a
-great many legitimate sites, so that is a deliberate choice, not a default
-remediation. See the limitations below for why this matters.
+By default **AAA Certificate Services is not flagged**: its own key is intact and
+dropping it is a deliberate choice, not a default remediation. See the
+limitations below for why this matters.
 
 ## Where `trustscan` looks
 
@@ -145,12 +145,13 @@ PEM/DER X.509, PKCS#7 (`.p7b/.p7c`), PKCS#12 (`.p12/.pfx`, tried with
 
 **A clean result does not mean the host is safe.** The compromised intermediates
 were also cross-signed by Sectigo's `AAA Certificate Services`, a legitimate root
-that most OS and library stores still trust (Firefox and Chrome already distrust
-it for TLS under their 15-year root-age policy, and Homebrew's updated
-`ca-certificates` bundle drops it) and that this tool does not flag by default,
-because removing it breaks a great many legitimate sites. A client that does not
-check revocation can still accept a forged chain through that path even with every
-emSign root gone. The real fix is to **block the eight intermediate keys by SPKI**
+that Mozilla and Chrome removed from their root stores in April 2025 under the
+15-year root-age policy, but that Windows and Apple still trust, as do older Linux
+`ca-certificates` packages and many Java and appliance keystores (Debian's
+security update for this incident removes it). This tool does not flag it by
+default, because dropping it is a deliberate decision rather than a default
+remediation. A client that does not check revocation can still accept a forged
+chain through that path even with every emSign root gone. The real fix is to **block the eight intermediate keys by SPKI**
 (as Chrome and Go do - the cross-signed copies are different certificates with the
 same keys, so a block by certificate hash misses them), patch the client, or
 enable revocation checking; removing a root is not enough on its own. This scanner
@@ -197,6 +198,8 @@ the independently published analysis (Mozilla, Google, Sectigo, Bugzilla 2083449
 - Mozilla Security Blog - [Protecting Firefox users](https://blog.mozilla.org/security/2026/10/20/protecting-firefox-users-following-the-compromise-of-emudhra-intermediate-certificates/)
 - Google Security Blog - [Protecting Chrome and Android users](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)
 - Sectigo - [AAA Certificate Services TLS trust-bit removal (April 2025)](https://www.sectigo.com/resource-library/enhancements-to-root-ca-and-hierarchies)
+- Mozilla wiki - [CA/Root CA Lifecycles](https://wiki.mozilla.org/CA/Root_CA_Lifecycles) (15-year root-age policy)
+- Debian - [ca-certificates package tracker](https://tracker.debian.org/ca-certificates) (security versions `20250419+deb13u1` / `20250419~deb12u2`)
 - Bugzilla [2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449) (access-restricted)
 - Scott Helme - [Eight Bits of Trust](https://scotthelme.co.uk/eight-bits-of-trust-emudhras-ca-keys-cracked-in-milliseconds/)
 - Community tracker - [emudhra.we-have-a-problem.com](https://emudhra.we-have-a-problem.com/)

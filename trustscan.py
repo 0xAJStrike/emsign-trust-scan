@@ -19,10 +19,12 @@ It matches a discovered certificate four ways:
   4. distrust_root_present   - an emSign root slated for distrust is present
 
 The legitimate Sectigo root "AAA Certificate Services" is not flagged by default:
-it cross-signed the bad intermediates, so it anchors their second trust path, but
-most OS and library stores still trust it and dropping it breaks legitimate sites.
---flag-aaa reports it as an INFO finding (cross_sign_root_present) for teams that
-have chosen to remove it. Every run ends with a one-line caveat about that path.
+it cross-signed the bad intermediates, so it anchors their second trust path.
+Mozilla and Chrome dropped it in April 2025 (15-year root-age policy), but
+Windows, Apple, older Linux ca-certificates packages and many Java/appliance
+keystores still trust it. --flag-aaa reports it as an INFO finding
+(cross_sign_root_present) for teams deciding whether to remove it. Every run
+ends with a one-line caveat about that path.
 
 IOC data comes from emsign_iocs.json (next to this script, or --ioc-file),
 which is generated and fingerprint-verified by tools/build_iocs.py.
@@ -63,18 +65,20 @@ _JKS_MAGIC = b"\xfe\xed\xfe\xed"
 
 # Printed once per run (not per finding): a scan of trust stores cannot prove a
 # client rejects forged chains, because the compromised intermediates are also
-# cross-signed by the legitimate AAA Certificate Services root. That root CAN be
-# removed (Firefox and Chrome already distrust it for TLS; Homebrew's bundle drops
-# it) but most OS and library stores still trust it and dropping it breaks many
-# legitimate sites, so it is not flagged by default.
+# cross-signed by the legitimate AAA Certificate Services root. Mozilla and Chrome
+# dropped that root in April 2025 (15-year root-age policy); Windows, Apple, older
+# Linux ca-certificates packages and many Java/appliance keystores still trust it,
+# so it is reported only on request (--flag-aaa), never by default.
 AAA_CAVEAT = (
     "Note: this scan does not prove the host rejects forged chains. The compromised "
     "intermediates are also cross-signed by AAA Certificate Services, a legitimate root "
-    "that most OS and library stores still trust and that this tool does not flag by "
-    "default (removing it breaks many legitimate sites; --flag-aaa reports it). A client "
-    "that skips revocation can still accept a forged chain through it even with every "
-    "emSign root gone. Full remediation needs the eight intermediate keys blocked by "
-    "SPKI (as Chrome and Go do), the client patched, or revocation checking enabled."
+    "that Mozilla and Chrome dropped in April 2025 (15-year root-age policy) but that "
+    "Windows, Apple, older Linux ca-certificates packages and many Java/appliance "
+    "keystores still trust. This tool does not flag it by default (--flag-aaa reports "
+    "it). A client that skips revocation can still accept a forged chain through it "
+    "even with every emSign root gone. Full remediation needs the eight intermediate "
+    "keys blocked by SPKI (as Chrome and Go do), the client patched, or revocation "
+    "checking enabled."
 )
 
 
@@ -227,8 +231,8 @@ def match_cert(der: bytes, cert: x509.Certificate, iocs: IOCSet,
 
     # Opt-in (--flag-aaa): the legitimate cross-signing root (AAA Certificate
     # Services) anchors the intermediates' second trust path. INFO only: it is a
-    # valid root that most stores still trust, and dropping it is a deliberate
-    # choice (Homebrew's bundle does) rather than a default remediation.
+    # valid root that several major stores still trust, and dropping it is a
+    # deliberate choice rather than a default remediation.
     if iocs.flag_aaa:
         ctx = iocs.context_cert_index.get(cert_fp)
         if ctx is None and spki_fp is not None:
@@ -237,10 +241,10 @@ def match_cert(der: bytes, cert: x509.Certificate, iocs: IOCSet,
             findings.append(Finding(severity="INFO", type="cross_sign_root_present",
                                     matched_name=ctx["name"],
                                     detail="legitimate cross-signing root present; it anchors the "
-                                           "compromised intermediates' second trust path. Not flagged "
-                                           "by default because most stores still trust it and dropping "
-                                           "it breaks legitimate sites; reported for teams that have "
-                                           "chosen to remove it (as Homebrew's bundle does).",
+                                           "compromised intermediates' second trust path. Mozilla and "
+                                           "Chrome dropped it in 2025; Windows, Apple, older Linux "
+                                           "bundles and many Java keystores still carry it. Not flagged "
+                                           "by default; reported for teams deciding whether to remove it.",
                                     **base))
 
     # Leaf/sub issued by a compromised intermediate -- only if this cert isn't
