@@ -7,8 +7,9 @@ whose private scalars were tiny integers (recovered values `4, 56, 66, 115, 155,
 Browsers and OS trust stores pushed distrust quickly - but **most non-browser
 trust stores don't update automatically**, which is what this tool finds.
 
-> Status: the incident is live. The bundled IOC data carries a `generated` date;
-> re-run the generator (below) to refresh it.
+> Status: the incident is live, so treat the bundled IOCs as a snapshot (every run
+> prints their `generated` date). To update them, refresh `tools/sources/*.json`
+> from the upstream tracker and re-run the generator (below).
 
 **`trustscan`** (Python) and **`trustscan.ps1`** (Windows/PowerShell) inventory
 the trust stores and CA bundles on a host and flag anything matching the affected
@@ -184,9 +185,12 @@ python -I tools/build_iocs.py \
     emsign_iocs.json
 ```
 
-(Isolated mode because the upstream tracker JSON is untrusted.) Upstream:
-[emudhra.we-have-a-problem.com](https://emudhra.we-have-a-problem.com/). Recovered
-scalars match the independently published analysis.
+The upstream inputs come from the **community-maintained** incident tracker
+[emudhra.we-have-a-problem.com](https://emudhra.we-have-a-problem.com/) (not an
+official vendor feed), so the generator **verifies** its data rather than trusting
+it (recomputing every fingerprint and reconfirming each weak key) and runs in
+isolated mode (`-I`) because that JSON is untrusted input. Recovered scalars match
+the independently published analysis (Mozilla, Google, Sectigo, Bugzilla 2083449).
 
 ## References
 
