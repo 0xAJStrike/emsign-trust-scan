@@ -151,13 +151,14 @@ that Mozilla and Chrome removed from their root stores in April 2025 under the
 security update for this incident removes it). This tool does not flag it by
 default, because dropping it is a deliberate decision rather than a default
 remediation. A client that does not check revocation can still accept a forged
-chain through that path even with every emSign root gone. The real fix is to **block the eight intermediate keys by SPKI**
-(as Chrome and Go do - the cross-signed copies are different certificates with the
-same keys, so a block by certificate hash misses them), patch the client, or
-enable revocation checking; removing a root is not enough on its own. This scanner
-finds stale and known-bad trust anchors; it does not prove a client rejects forged
-chains. (`--flag-aaa` / `-FlagAaa` reports AAA presence as an INFO finding, for
-teams that have chosen to drop it.)
+chain through that path even with every emSign root gone. The real fix is to
+**block the eight intermediate keys by SPKI** (as Chrome and Go do - the
+cross-signed copies are different certificates with the same keys, so a block by
+certificate hash misses them), patch the client, or enable revocation checking;
+removing a root is not enough on its own. This scanner finds stale and known-bad
+trust anchors; it does not prove a client rejects forged chains. (`--flag-aaa` /
+`-FlagAaa` reports AAA presence as an INFO finding, for teams that have chosen to
+drop it.)
 
 **`trustscan` cannot cover compiled-in root stores.** Go, Node.js, uv, Electron,
 Bun, and Rust `webpki-roots`/`rustls-webpki` bake their CA roots into the binary
