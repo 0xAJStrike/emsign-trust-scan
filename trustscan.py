@@ -373,17 +373,47 @@ def scan_certifi(iocs: IOCSet) -> list[Finding]:
 # Globs are expanded; only existing files are scanned. Compiled-in root stores
 # (Go, Node, Electron, Bun, uv, rustls) have no file and are out of scope here.
 _KNOWN_BUNDLE_GLOBS = (
+    # OS aggregate bundles
     "/etc/ssl/certs/ca-certificates.crt",          # Debian/Ubuntu/Arch/Alpine aggregate
     "/etc/pki/tls/certs/ca-bundle.crt",            # RHEL/Fedora aggregate
     "/etc/ssl/cert.pem",                           # BSD/Alpine/LibreSSL
+    "/etc/ssl/ca-bundle.pem",                      # SUSE
+    "/var/lib/ca-certificates/ca-bundle.pem",      # SUSE
+    "/usr/share/ca-certificates/",                 # Debian source certs (dir)
+    # RHEL ca-trust extracted + admin anchors
+    "/etc/pki/tls/cert.pem",                       # RHEL
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",  # RHEL extracted PEM
+    "/etc/pki/ca-trust/extracted/java/cacerts",    # RHEL consolidated Java trust (JKS)
+    "/etc/pki/ca-trust/source/anchors/",           # RHEL admin-added anchors (dir)
+    # FreeBSD
     "/usr/local/share/certs/ca-root-nss.crt",      # FreeBSD ca_root_nss
     "/usr/local/etc/ssl/cert.pem",                 # FreeBSD/ports
+    # Homebrew (Intel + Apple silicon)
     "/opt/homebrew/etc/ca-certificates/cert.pem",  # Homebrew (Apple silicon)
     "/usr/local/etc/ca-certificates/cert.pem",     # Homebrew (Intel)
-    "/usr/local/etc/openssl*/cert.pem",            # Homebrew openssl
-    "/usr/local/share/curl/curl-ca-bundle.crt",    # curl standalone bundle
-    r"C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt",  # Git for Windows / curl
+    "/opt/homebrew/etc/openssl*/cert.pem",         # Homebrew openssl (Apple silicon)
+    "/usr/local/etc/openssl*/cert.pem",            # Homebrew openssl (Intel)
+    # MacPorts
+    "/opt/local/etc/openssl/cert.pem",
+    "/opt/local/etc/ssl/cert.pem",
+    "/opt/local/share/curl/curl-ca-bundle.crt",
+    # curl standalone / Git for Windows
+    "/usr/local/share/curl/curl-ca-bundle.crt",
+    r"C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt",
     r"C:\Program Files\Git\usr\ssl\certs\ca-bundle.crt",
+    # conda / Anaconda (each env ships its own ssl/cacert.pem)
+    "$CONDA_PREFIX/ssl/cacert.pem",                # active conda env
+    "/opt/conda/ssl/cacert.pem",
+    "/opt/conda/envs/*/ssl/cacert.pem",
+    "~/anaconda3/ssl/cacert.pem",
+    "~/anaconda3/envs/*/ssl/cacert.pem",
+    "~/miniconda3/ssl/cacert.pem",
+    "~/miniconda3/envs/*/ssl/cacert.pem",
+    "~/miniforge3/ssl/cacert.pem",
+    "~/miniforge3/envs/*/ssl/cacert.pem",
+    # AWS CLI v2 bundled botocore
+    "/usr/local/aws-cli/v2/current/dist/awscli/botocore/cacert.pem",
+    r"C:\Program Files\Amazon\AWSCLIV2\awscli\botocore\cacert.pem",
 )
 
 
@@ -399,20 +429,24 @@ def _pip_vendored_certifi() -> Optional[Path]:
 def _known_bundle_paths() -> list[Path]:
     paths: list[Path] = []
     for pattern in _KNOWN_BUNDLE_GLOBS:
-        if "*" in pattern or "?" in pattern:
-            paths.extend(Path(p) for p in glob.glob(pattern))
+        expanded = os.path.expanduser(os.path.expandvars(pattern))  # ~ and $CONDA_PREFIX
+        if "*" in expanded or "?" in expanded:
+            paths.extend(Path(p) for p in glob.glob(expanded))
         else:
-            paths.append(Path(pattern))
+            paths.append(Path(expanded))
     vendored = _pip_vendored_certifi()
     if vendored:
         paths.append(vendored)
-    return [p for p in paths if p.is_file()]
+    return [p for p in paths if p.exists()]
 
 
 def scan_known_bundles(iocs: IOCSet) -> list[Finding]:
     findings: list[Finding] = []
     for path in _known_bundle_paths():
-        findings.extend(_scan_bundle_file(path, iocs, source="bundle"))
+        if path.is_dir():                       # e.g. anchors/, /usr/share/ca-certificates
+            findings.extend(scan_path(path, iocs))
+        else:
+            findings.extend(_scan_bundle_file(path, iocs, source="bundle"))
     return findings
 
 
@@ -598,9 +632,10 @@ def _nss_db_paths() -> list[Path]:
                  home / "snap" / "firefox" / "common" / ".mozilla" / "firefox"):
         if base.is_dir():
             out.extend(base.glob("*/cert9.db"))
-    shared = home / ".pki" / "nssdb" / "cert9.db"   # Chrome/Chromium on Linux
-    if shared.is_file():
-        out.append(shared)
+    for shared in (home / ".pki" / "nssdb" / "cert9.db",   # Chrome/Chromium on Linux
+                   Path("/etc/pki/nssdb/cert9.db")):       # RHEL system-wide NSS
+        if shared.is_file():
+            out.append(shared)
     appdata = os.environ.get("APPDATA")
     if appdata:
         for sub in ("Mozilla/Firefox/Profiles", "Thunderbird/Profiles"):

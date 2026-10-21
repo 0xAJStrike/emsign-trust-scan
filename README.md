@@ -72,12 +72,14 @@ limitations below for why this matters.
 | Source | What it is | Locations checked |
 |---|---|---|
 | `certifi` | Python CA bundle | `certifi.where()` (resolved at runtime) |
-| `bundles` → distro | OS `ca-certificates` aggregate | `/etc/ssl/certs/ca-certificates.crt` · `/etc/pki/tls/certs/ca-bundle.crt` · `/etc/ssl/cert.pem` |
+| `bundles` → distro | OS `ca-certificates` aggregates | Debian/Arch/Alpine `/etc/ssl/certs/ca-certificates.crt` · RHEL `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`, consolidated Java `cacerts`, admin `anchors/` dir · SUSE `/etc/ssl/ca-bundle.pem`, `/var/lib/ca-certificates/ca-bundle.pem` · Debian source dir `/usr/share/ca-certificates/` · `/etc/ssl/cert.pem` |
 | `bundles` → FreeBSD | `ca_root_nss` | `/usr/local/share/certs/ca-root-nss.crt` · `/usr/local/etc/ssl/cert.pem` |
-| `bundles` → Homebrew | brew `ca-certificates` | `/opt/homebrew/etc/ca-certificates/cert.pem` · `/usr/local/etc/ca-certificates/cert.pem` · `/usr/local/etc/openssl*/cert.pem` |
-| `bundles` → curl | standalone curl bundle | `/usr/local/share/curl/curl-ca-bundle.crt` · `C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt` · `C:\Program Files\Git\usr\ssl\certs\ca-bundle.crt` |
+| `bundles` → Homebrew / MacPorts | brew / port `ca-certificates`, openssl | `/opt/homebrew/etc/ca-certificates/cert.pem` · `/opt/homebrew/etc/openssl*/cert.pem` · `/usr/local/etc/...` (Intel) · `/opt/local/etc/{openssl,ssl}/cert.pem` |
+| `bundles` → curl | standalone curl bundle | `/usr/local/share/curl/curl-ca-bundle.crt` · `/opt/local/share/curl/curl-ca-bundle.crt` · `C:\Program Files\Git\...\ca-bundle.crt` |
+| `bundles` → conda | each env's `ssl/cacert.pem` | `$CONDA_PREFIX` · `/opt/conda` · `~/anaconda3`, `~/miniconda3`, `~/miniforge3` (incl. `envs/*`) |
+| `bundles` → AWS CLI v2 | bundled botocore | `/usr/local/aws-cli/.../botocore/cacert.pem` · `C:\Program Files\Amazon\AWSCLIV2\...` |
 | `bundles` → pip | pip's vendored certifi | `<pip>/_vendor/certifi/cacert.pem` (resolved via `import pip`) |
-| `nss` | Firefox / Thunderbird / Chrome-Linux NSS DB | `~/.mozilla/firefox/*/cert9.db` · `~/.thunderbird/*/cert9.db` · `~/snap/firefox/common/.mozilla/firefox/*/cert9.db` · `~/.pki/nssdb/cert9.db` · `%APPDATA%\Mozilla\Firefox\Profiles\*\cert9.db` · `%APPDATA%\Thunderbird\Profiles\*\cert9.db` |
+| `nss` | Firefox / Thunderbird / Chrome-Linux + system NSS DB | `~/.mozilla/firefox/*/cert9.db` · `~/.thunderbird/*/cert9.db` · `~/snap/firefox/common/.mozilla/firefox/*/cert9.db` · `~/.pki/nssdb/cert9.db` · `/etc/pki/nssdb/cert9.db` · `%APPDATA%\Mozilla\Firefox\Profiles\*\cert9.db` · `%APPDATA%\Thunderbird\Profiles\*\cert9.db` |
 
 ### OS trust stores & other sources
 
