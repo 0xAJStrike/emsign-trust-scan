@@ -90,7 +90,7 @@ limitations below for why this matters.
 | `os` (Windows, Python) | `ssl.enum_certificates` for `ROOT`, `CA`, `MY`, `TrustedPublisher`, `AuthRoot` + Group-Policy-pushed LocalMachine roots (registry) |
 | `java` | `$JAVA_HOME` + JVM roots (`/usr/lib/jvm/*`, `/opt/java/*`, `/Library/Java/JavaVirtualMachines/*`, `C:\Program Files\Java\*`, Adoptium, Corretto, Microsoft) → `.../lib/security/cacerts` |
 | `env` | files in `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`; directory in `SSL_CERT_DIR` |
-| `containers` (opt-in) | Docker `/var/lib/docker/overlay2/*/{diff,merged}`, podman (root + rootless), containerd snapshots — scans each layer's cert paths; **needs root**, location names the layer |
+| `containers` (opt-in) | Docker `/var/lib/docker/overlay2/*/{diff,merged}`, podman (root + rootless), containerd snapshots - scans each layer's cert paths; **needs root**, location names the layer |
 | `paths` | any files/directories you pass |
 | `--rootfs <dir>` | the distro / curl / Java / **Android** store locations **inside** an extracted image or firmware rootfs |
 
