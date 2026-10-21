@@ -16,6 +16,12 @@ certs. Pure-stdlib + `cryptography`; no other dependencies.
 
 ## Quickstart
 
+Needs Python 3 and `cryptography` (the only dependency):
+
+```bash
+pip install -r requirements.txt
+```
+
 ```bash
 # scan this host's trust stores and CA bundles
 python trustscan.py

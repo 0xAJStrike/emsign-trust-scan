@@ -742,14 +742,17 @@ def run_scan(paths: list[str], iocs: IOCSet, sources: set[str],
 
 
 def _silence_legacy_cert_warnings() -> None:
-    """Real trust stores hold legacy certs that trip deprecation warnings; the
-    scanner handles them, so keep that noise off stderr."""
+    """Real trust stores hold legacy / non-conformant certs that trip warnings
+    (deprecated serials, over-length name attributes like a 16-char countryName);
+    the scanner handles them, so keep that noise off stderr."""
     import warnings
     try:
         from cryptography.utils import CryptographyDeprecationWarning
         warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
     except Exception:
         pass
+    warnings.filterwarnings("ignore", message=r"Attribute's length must be",
+                            category=UserWarning)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
