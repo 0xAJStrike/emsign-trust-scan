@@ -209,3 +209,9 @@ the independently published analysis (Mozilla, Google, Sectigo, Bugzilla 2083449
 Defensive tooling for authorized use on systems you administer. The IOC set
 reflects the incident as of the file's `generated` date; verify against primary
 sources before acting. No warranty.
+
+---
+
+*AI-assisted and written in a day. The tests rebuild the leaked keys from the
+published values and check the scanner catches them, and the IOC data is
+regenerated and re-verified from source rather than trusted.*
