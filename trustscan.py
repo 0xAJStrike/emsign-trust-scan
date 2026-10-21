@@ -344,19 +344,19 @@ def _certs_from_bytes(data: bytes) -> list[tuple[bytes, x509.Certificate]]:
     return []
 
 
-def scan_path(path: Path, iocs: IOCSet) -> list[Finding]:
+def scan_path(path: Path, iocs: IOCSet, source: str = "file") -> list[Finding]:
     findings: list[Finding] = []
     if path.is_dir():
         for child in sorted(path.rglob("*")):
             if child.is_file() and child.suffix.lower() in _CERT_EXTS:
-                findings.extend(scan_path(child, iocs))
+                findings.extend(scan_path(child, iocs, source))
         return findings
     try:
         data = path.read_bytes()
     except OSError:
         return findings
     for der, cert in _certs_from_bytes(data):
-        findings.extend(match_cert(der, cert, iocs, source="file", location=str(path)))
+        findings.extend(match_cert(der, cert, iocs, source=source, location=str(path)))
     return findings
 
 
@@ -444,7 +444,7 @@ def scan_known_bundles(iocs: IOCSet) -> list[Finding]:
     findings: list[Finding] = []
     for path in _known_bundle_paths():
         if path.is_dir():                       # e.g. anchors/, /usr/share/ca-certificates
-            findings.extend(scan_path(path, iocs))
+            findings.extend(scan_path(path, iocs, source="bundle"))
         else:
             findings.extend(_scan_bundle_file(path, iocs, source="bundle"))
     return findings
@@ -584,6 +584,12 @@ def _scan_linux_dirs(iocs: IOCSet) -> list[Finding]:
         p = Path(d)
         if p.exists():
             findings.extend(scan_path(p, iocs))
+    # Android / AOSP (sys.platform is 'linux'): hash-named cert files per dir.
+    for d in ("/system/etc/security/cacerts", "/apex/com.android.conscrypt/cacerts",
+              "/data/misc/keychain/cacerts-added", "/data/misc/user/0/cacerts-added"):
+        p = Path(d)
+        if p.is_dir():
+            findings.extend(_scan_dir_any(p, iocs, source="android-store"))
     return findings
 
 
@@ -686,27 +692,102 @@ def scan_nss(iocs: IOCSet) -> list[Finding]:
     return findings
 
 
-# --- Container / extracted-rootfs mode ------------------------------------- #
+# --- Container / rootfs / embedded-device mode ----------------------------- #
 
-def scan_rootfs(root: Path, iocs: IOCSet) -> list[Finding]:
-    """Scan the trust stores inside an extracted image rootfs (not the host)."""
+# Trust-store locations inside an image / firmware rootfs (relative to its root).
+_ROOTFS_CERT_DIRS = (
+    "etc/ssl/certs", "usr/local/share/ca-certificates", "etc/pki/tls/certs",
+    "etc/pki/ca-trust/extracted/pem", "usr/share/ca-certificates",
+    "var/lib/ca-certificates/pem", "etc/ca-certificates",
+)
+_ROOTFS_CERT_FILES = (
+    "etc/ssl/certs/ca-certificates.crt", "etc/pki/tls/certs/ca-bundle.crt",
+    "etc/ssl/cert.pem", "etc/pki/tls/cert.pem", "etc/ssl/ca-bundle.pem",
+    "var/lib/ca-certificates/ca-bundle.pem",
+    "etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "etc/pki/ca-trust/extracted/java/cacerts",   # JKS
+)
+# Android / AOSP IoT: one cert per file, hash-named (e.g. a1b2c3d4.0) -> scan all.
+_ANDROID_CERT_DIRS = (
+    "system/etc/security/cacerts", "apex/com.android.conscrypt/cacerts",
+    "data/misc/keychain/cacerts-added", "data/misc/user/0/cacerts-added",
+)
+
+
+def _scan_dir_any(path: Path, iocs: IOCSet, source: str) -> list[Finding]:
+    """Scan every file in a directory regardless of extension (Android stores
+    each trusted cert as a hash-named file like a1b2c3d4.0, no cert extension)."""
     findings: list[Finding] = []
-    for d in ("etc/ssl/certs", "usr/local/share/ca-certificates", "etc/pki/tls/certs",
-              "etc/pki/ca-trust/extracted/pem", "usr/share/ca-certificates"):
+    try:
+        children = sorted(path.rglob("*"))
+    except OSError:
+        return findings
+    for child in children:
+        try:
+            if child.is_file():
+                findings.extend(_scan_bundle_file(child, iocs, source))
+        except OSError:
+            continue
+    return findings
+
+
+def _scan_trust_paths(root: Path, iocs: IOCSet, source: str) -> list[Finding]:
+    """Scan the well-known trust-store files/dirs under a rootfs prefix."""
+    findings: list[Finding] = []
+    for d in _ROOTFS_CERT_DIRS:
         p = root / d
-        if p.exists():
-            findings.extend(scan_path(p, iocs))
-    for f in ("etc/ssl/cert.pem", "etc/pki/tls/cert.pem"):
+        if p.is_dir():
+            findings.extend(scan_path(p, iocs, source=source))
+    for f in _ROOTFS_CERT_FILES:
         p = root / f
         if p.is_file():
-            findings.extend(_scan_bundle_file(p, iocs, source="rootfs"))
-    for cacerts in root.glob("**/lib/security/cacerts"):
+            findings.extend(_scan_bundle_file(p, iocs, source))
+    for d in _ANDROID_CERT_DIRS:
+        p = root / d
+        if p.is_dir():
+            findings.extend(_scan_dir_any(p, iocs, source))
+    return findings
+
+
+def scan_rootfs(root: Path, iocs: IOCSet) -> list[Finding]:
+    """Scan the trust stores inside one extracted image / firmware rootfs."""
+    findings = _scan_trust_paths(root, iocs, source="rootfs")
+    for cacerts in root.glob("**/lib/security/cacerts"):   # Java keystores anywhere
         try:
             data = cacerts.read_bytes()
         except OSError:
             continue
         for der, cert in _certs_from_bytes(data):
             findings.extend(match_cert(der, cert, iocs, source="rootfs-java", location=str(cacerts)))
+    return findings
+
+
+# Host container storage: each container layer is a rootfs fragment. Scan the
+# known cert paths per layer (targeted, not a full-tree walk); the storage dirs
+# are root-only, so unreadable layers are skipped.
+_CONTAINER_LAYER_GLOBS = (
+    "/var/lib/docker/overlay2/*/diff",                       # Docker (layers at rest)
+    "/var/lib/docker/overlay2/*/merged",                     # Docker (running)
+    "/var/lib/containers/storage/overlay/*/diff",            # podman (root)
+    "/var/lib/containers/storage/overlay/*/merged",
+    "~/.local/share/containers/storage/overlay/*/diff",      # podman (rootless)
+    "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/*/fs",  # containerd
+)
+
+
+def scan_containers(iocs: IOCSet) -> list[Finding]:
+    """Scan Docker / podman / containerd container layers on the host for the CA
+    bundles they ship. Opt-in (`--source containers`); needs root for the storage
+    dirs. The location names the layer, so you can map a hit back to an image."""
+    findings: list[Finding] = []
+    for pattern in _CONTAINER_LAYER_GLOBS:
+        for layer in glob.glob(os.path.expanduser(pattern)):
+            lp = Path(layer)
+            try:
+                if lp.is_dir():
+                    findings.extend(_scan_trust_paths(lp, iocs, source="container"))
+            except OSError:
+                continue
     return findings
 
 
@@ -788,6 +869,8 @@ def run_scan(paths: list[str], iocs: IOCSet, sources: set[str],
         findings.extend(scan_java_cacerts(iocs))
     if "nss" in sources:
         findings.extend(scan_nss(iocs))
+    if "containers" in sources:
+        findings.extend(scan_containers(iocs))
     if "paths" in sources:
         for p in paths:
             findings.extend(scan_path(Path(p), iocs))
@@ -820,8 +903,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--ioc-file", default=None,
                         help="IOC JSON (default: emsign_iocs.json beside this script)")
     parser.add_argument("--source", action="append",
-                        choices=["os", "certifi", "bundles", "env", "java", "nss", "paths", "all"],
-                        help="which sources to scan (repeatable; default all applicable)")
+                        choices=["os", "certifi", "bundles", "env", "java", "nss",
+                                 "containers", "paths", "all"],
+                        help="which sources to scan (repeatable; default all applicable; "
+                             "'containers' scans Docker/podman/containerd layers and needs root)")
     parser.add_argument("--rootfs", action="append", default=[],
                         help="scan trust stores inside an extracted image rootfs (repeatable)")
     parser.add_argument("--flag-aaa", action="store_true",

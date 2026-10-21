@@ -541,7 +541,35 @@ def test_scan_rootfs_dirs_and_cacerts(tmp_path):
         _make_jks([bad.public_bytes(Encoding.DER)]))
     findings = ts.dedupe(ts.scan_rootfs(root, iocs))
     sources = {f.source for f in findings}
-    assert "file" in sources and "rootfs-java" in sources
+    assert "rootfs" in sources and "rootfs-java" in sources
+
+
+def test_scan_rootfs_android_hashed_certs(tmp_path):
+    """Android stores each trusted cert as a hash-named file (a1b2c3d4.0) with no
+    cert extension; the rootfs scan must still pick it up."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    root = tmp_path / "android"
+    cacerts = root / "system" / "etc" / "security" / "cacerts"
+    cacerts.mkdir(parents=True)
+    (cacerts / "a1b2c3d4.0").write_bytes(pem_bytes(bad))   # hash-named, no .pem
+    findings = ts.dedupe(ts.scan_rootfs(root, iocs))
+    assert any(f.type == "compromised_ca_cert" for f in findings)
+
+
+def test_scan_containers(tmp_path, monkeypatch):
+    """scan_containers walks container layer dirs and scans each layer's cert
+    paths; a bad bundle in a layer's etc/ssl/certs is found with source=container."""
+    bad, iocs = _bad_cert_and_ioc(tmp_path)
+    layer = tmp_path / "overlay2" / "deadbeef" / "diff"
+    (layer / "etc" / "ssl" / "certs").mkdir(parents=True)
+    (layer / "etc" / "ssl" / "certs" / "ca-certificates.crt").write_bytes(pem_bytes(bad))
+    monkeypatch.setattr(ts, "_CONTAINER_LAYER_GLOBS",
+                        (str(tmp_path / "overlay2" / "*" / "diff"),))
+    findings = ts.dedupe(ts.scan_containers(iocs))
+    assert len(findings) == 1
+    assert findings[0].source == "container"
+    assert findings[0].type == "compromised_ca_cert"
+    assert "deadbeef" in findings[0].location   # layer id preserved for mapping
 
 
 @pytest.mark.skipif(not SHIPPED_IOC.exists(), reason="emsign_iocs.json not built")

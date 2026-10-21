@@ -85,13 +85,14 @@ limitations below for why this matters.
 
 | Source | Locations checked |
 |---|---|
-| `os` (Linux) | `/etc/ssl/certs` · `/usr/local/share/ca-certificates` · `/etc/pki/tls/certs` · `/etc/pki/ca-trust/extracted/pem` (recursed) |
+| `os` (Linux) | `/etc/ssl/certs` · `/usr/local/share/ca-certificates` · `/etc/pki/tls/certs` · `/etc/pki/ca-trust/extracted/pem` (recursed), plus **Android/AOSP** `/system/etc/security/cacerts`, `/apex/com.android.conscrypt/cacerts`, `cacerts-added/` (hash-named files) |
 | `os` (macOS) | `security find-certificate -a -p` on default keychains + `SystemRootCertificates.keychain` |
 | `os` (Windows, Python) | `ssl.enum_certificates` for `ROOT`, `CA`, `MY`, `TrustedPublisher`, `AuthRoot` + Group-Policy-pushed LocalMachine roots (registry) |
 | `java` | `$JAVA_HOME` + JVM roots (`/usr/lib/jvm/*`, `/opt/java/*`, `/Library/Java/JavaVirtualMachines/*`, `C:\Program Files\Java\*`, Adoptium, Corretto, Microsoft) → `.../lib/security/cacerts` |
 | `env` | files in `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`; directory in `SSL_CERT_DIR` |
+| `containers` (opt-in) | Docker `/var/lib/docker/overlay2/*/{diff,merged}`, podman (root + rootless), containerd snapshots — scans each layer's cert paths; **needs root**, location names the layer |
 | `paths` | any files/directories you pass |
-| `--rootfs <dir>` | the distro/curl/Java store locations **inside** an extracted container image |
+| `--rootfs <dir>` | the distro / curl / Java / **Android** store locations **inside** an extracted image or firmware rootfs |
 
 > `env` variables hold a **path**, not cert data - `trustscan` reads the file(s)
 > at that path.
@@ -164,9 +165,10 @@ drop it.)
 
 **`trustscan` cannot cover compiled-in root stores.** Go, Node.js, uv, Electron,
 Bun, and Rust `webpki-roots`/`rustls-webpki` bake their CA roots into the binary
-- there is no cert file to scan, so a scanner can't detect them. For those, the
-only valid check is *"is the runtime ≥ the patched version?"* - a version/patch
-check, which is out of scope for this tool.
+- there is no cert file to scan, so a scanner can't detect them. The same is true
+of many embedded/IoT devices that compile roots into firmware (mbedTLS, wolfSSL).
+For those, the only valid check is *"is the runtime ≥ the patched version?"* - a
+version/patch check, which is out of scope for this tool.
 
 **It's a point-in-time, per-host inventory.** At fleet scale, feed the CSV/JSON
 into your existing pipeline, or use `--rootfs` per image in CI.
